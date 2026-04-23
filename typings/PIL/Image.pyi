@@ -1,0 +1,9 @@
+from typing import Self
+from typing import Type
+import numpy as np
+from numpy.typing import NDArray
+
+class Image:
+    def __init__(self: Self) -> None:...
+    @classmethod
+    def fromarray(cls: Type['Image'], image: NDArray[np.uint8]) -> 'Image': ...
