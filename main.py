@@ -15,11 +15,9 @@ warnings.filterwarnings( 'ignore' )
 
 import tkinter as tk
 from ffpyplayer.player import MediaPlayer
+from ffpyplayer.pic import SWScale
 from PIL import Image, ImageTk
 import time
-import numpy as np
-from numpy.typing import NDArray
-from typing import cast
 
 def main() -> None:
     root: tk.Tk = tk.Tk()
@@ -32,18 +30,22 @@ def main() -> None:
     player: MediaPlayer = MediaPlayer("hoge.mp4")
 
     img_on_cnv = None
+    cnv_size = (640, 480)
+    sws_to_rgb = None
+    sws_src_fmt = ""
+    sws_src_size = (0, 0)
 
     while True:
         frame, val = player.get_frame()
         if val == "eof":
             break
-        if frame == None:
-            continue
-        if val != "video":
+        if frame is None:
+            # フレーム未準備時もイベントを処理してウィンドウを固めない
+            root.update_idletasks()
+            root.update()
             continue
 
         img, video_pts = frame
-        img = cast(NDArray[np.uint8], img)
 
         while True:
             audio_pts = player.get_pts()
@@ -54,15 +56,35 @@ def main() -> None:
 
         # 表示
 
-        pil_img: Image = Image.fromarray(img)
+        src_size = img.get_size()
+        src_fmt = img.get_pixel_format()
+        if src_fmt != "rgb24":
+            # PILで扱いやすいRGBに揃える
+            if sws_to_rgb is None or sws_src_fmt != src_fmt or sws_src_size != src_size:
+                sws_to_rgb = SWScale(src_size[0], src_size[1], src_fmt, ofmt="rgb24")
+                sws_src_fmt = src_fmt
+                sws_src_size = src_size
+            img = sws_to_rgb.scale(img)
+            src_size = img.get_size()
+
+        plane = img.to_bytearray()[0]
+        pil_img = Image.frombytes("RGB", src_size, bytes(plane))
 
         tk_img = ImageTk.PhotoImage(image=pil_img)
+        cnv.image = tk_img  # 参照を保持してGCで消えないようにする
 
         if img_on_cnv is None:
             w, h = pil_img.size
             setSize(root, w, h)
+            cnv.config(width=w, height=h)
+            cnv_size = (w, h)
             img_on_cnv = cnv.create_image(0, 0, anchor='nw', image=tk_img)
         else:
+            w, h = pil_img.size
+            if cnv_size != (w, h):
+                setSize(root, w, h)
+                cnv.config(width=w, height=h)
+                cnv_size = (w, h)
             cnv.itemconfig(img_on_cnv, image=tk_img)
         
         root.update_idletasks()
