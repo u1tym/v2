@@ -30,6 +30,8 @@ def main() -> None:
 
     player: MediaPlayer = MediaPlayer("hoge.mp4")
 
+    img_on_cnv = None
+
     while True:
         frame, val = player.get_frame()
         if val == "eof":
@@ -55,6 +57,10 @@ def main() -> None:
 
         tk_img = ImageTk.PhotoImage(image=pil_img)
 
+        if img_on_cnv is None:
+            img_on_cnv = cnv.create_image(0, 0, anchor='nw', image=tk_img)
+        else:
+            cnv.itemconfig(img_on_cnv, image=tk_img)
     return
 
 def setSize(rt: tk.Tk, w: int, h: int) -> None:
