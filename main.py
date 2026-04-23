@@ -23,6 +23,7 @@ from typing import cast
 
 def main() -> None:
     root: tk.Tk = tk.Tk()
+    root.title("ffpyplayer sample")
     setSize(root, 640, 480)
 
     cnv: tk.Canvas = tk.Canvas(root, bg="black", width=640, height=480)
@@ -58,9 +59,15 @@ def main() -> None:
         tk_img = ImageTk.PhotoImage(image=pil_img)
 
         if img_on_cnv is None:
+            w, h = pil_img.size
+            setSize(root, w, h)
             img_on_cnv = cnv.create_image(0, 0, anchor='nw', image=tk_img)
         else:
             cnv.itemconfig(img_on_cnv, image=tk_img)
+        
+        root.update_idletasks()
+        root.update()
+
     return
 
 def setSize(rt: tk.Tk, w: int, h: int) -> None:
