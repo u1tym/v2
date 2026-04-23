@@ -37,6 +37,7 @@ def main() -> None:
 
     while True:
         frame, val = player.get_frame()
+        #print(val)
         if val == "eof":
             break
         if frame is None:
@@ -46,13 +47,6 @@ def main() -> None:
             continue
 
         img, video_pts = frame
-
-        while True:
-            audio_pts = player.get_pts()
-            if video_pts > audio_pts:
-                time.sleep(video_pts - audio_pts)
-                continue
-            break
 
         # 表示
 
@@ -73,18 +67,18 @@ def main() -> None:
         tk_img = ImageTk.PhotoImage(image=pil_img)
         cnv.image = tk_img  # 参照を保持してGCで消えないようにする
 
+        w, h = pil_img.size
+
+        audio_pts = player.get_pts()
+        if video_pts > audio_pts:
+            print(video_pts - audio_pts)
+            time.sleep(video_pts - audio_pts + 0.015)
+
         if img_on_cnv is None:
-            w, h = pil_img.size
             setSize(root, w, h)
             cnv.config(width=w, height=h)
-            cnv_size = (w, h)
             img_on_cnv = cnv.create_image(0, 0, anchor='nw', image=tk_img)
         else:
-            w, h = pil_img.size
-            if cnv_size != (w, h):
-                setSize(root, w, h)
-                cnv.config(width=w, height=h)
-                cnv_size = (w, h)
             cnv.itemconfig(img_on_cnv, image=tk_img)
         
         root.update_idletasks()
