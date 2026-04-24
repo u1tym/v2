@@ -73,11 +73,13 @@ def main() -> None:
     last_video_pts = 0.0
     skip_av_sync_until = 0.0
     app_closing = False
+    speed_supported = False
 
     current_sec_var = tk.StringVar(value="再生位置: 0.00 秒")
     pause_btn_txt = tk.StringVar(value="一時停止")
     file_var = tk.StringVar(value=f"ファイル: {current_file}")
     chapter_name_var = tk.StringVar(value="")
+    speed_var = tk.StringVar(value="1.0x")
 
     btn_frame = tk.Frame(ctrl_frame)
     btn_frame.pack(side="top", fill="x")
@@ -120,6 +122,18 @@ def main() -> None:
     load_chapter_btn.pack(side="left", padx=(8, 0))
     save_chapter_btn.pack(side="left", padx=(8, 0))
 
+    speed_frame = tk.Frame(right_frame)
+    speed_frame.pack(side="top", fill="x", pady=(0, 8))
+    speed_label = tk.Label(speed_frame, text="再生速度:")
+    speed_label.pack(side="left")
+    speed_options = ["0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x"]
+    speed_menu = tk.OptionMenu(speed_frame, speed_var, *speed_options)
+    speed_menu.config(width=8)
+    speed_menu.pack(side="left", padx=(8, 0))
+    speed_status_var = tk.StringVar(value="")
+    speed_status_lbl = tk.Label(speed_frame, textvariable=speed_status_var, anchor="w")
+    speed_status_lbl.pack(side="left", padx=(8, 0))
+
     chapter_listbox = tk.Listbox(right_frame, height=18)
     chapter_listbox.pack(side="top", fill="both", expand=True)
 
@@ -161,7 +175,7 @@ def main() -> None:
             chapter_listbox.insert(tk.END, f"({ch['sec']:.2f}) {seconds_to_hms(ch['sec'])} {ch['name']}")
 
     def reset_player(video_path: str) -> None:
-        nonlocal player, current_file, img_on_cnv, sws_to_rgb, sws_src_fmt, sws_src_size
+        nonlocal player, current_file, img_on_cnv, sws_to_rgb, sws_src_fmt, sws_src_size, skip_av_sync_until, speed_supported
         nonlocal duration_sec, paused, slider_dragging
         try:
             player.close_player()
@@ -180,6 +194,16 @@ def main() -> None:
         pause_btn_txt.set("一時停止")
         seek_var.set(0.0)
         current_sec_var.set("再生位置: 0.00 秒")
+        skip_av_sync_until = time.time() + 0.4
+        speed_supported = callable(getattr(player, "set_speed", None))
+        if speed_supported:
+            speed_menu.config(state="normal")
+            speed_status_var.set("")
+        else:
+            speed_menu.config(state="disabled")
+            speed_var.set("1.0x")
+            speed_status_var.set("(この環境では未対応)")
+        on_speed_change()
 
     def on_select_file() -> None:
         path = filedialog.askopenfilename(
@@ -320,6 +344,25 @@ def main() -> None:
         player.seek(clamp_seek_target(seek_var.get()), relative=False)
         skip_av_sync_until = time.time() + 0.4
 
+    def on_speed_change(*_args) -> None:
+        nonlocal skip_av_sync_until
+        if not speed_supported:
+            return
+        speed_txt = speed_var.get().strip().lower()
+        if not speed_txt.endswith("x"):
+            return
+        try:
+            speed = float(speed_txt[:-1])
+        except ValueError:
+            return
+        if speed <= 0:
+            return
+        try:
+            player.set_speed(speed)
+            skip_av_sync_until = time.time() + 0.4
+        except Exception:
+            messagebox.showerror("エラー", "再生速度の変更に失敗しました。")
+
     def on_close() -> None:
         nonlocal app_closing
         if app_closing:
@@ -352,6 +395,16 @@ def main() -> None:
     chapter_listbox.bind("<<ListboxSelect>>", on_chapter_select)
     chapter_listbox.bind("<Double-Button-1>", on_chapter_jump)
     root.protocol("WM_DELETE_WINDOW", on_close)
+    speed_var.trace_add("write", on_speed_change)
+    speed_supported = callable(getattr(player, "set_speed", None))
+    if speed_supported:
+        speed_menu.config(state="normal")
+        speed_status_var.set("")
+    else:
+        speed_menu.config(state="disabled")
+        speed_var.set("1.0x")
+        speed_status_var.set("(この環境では未対応)")
+    on_speed_change()
 
     while True:
         if app_closing:
@@ -405,6 +458,7 @@ def main() -> None:
                         skip_av_sync_until = max(skip_av_sync_until, time.time() + 0.4)
                 if time.time() >= skip_av_sync_until and audio_pts is not None and video_pts > audio_pts:
                     time.sleep(min(video_pts - audio_pts, 0.05))
+                    #time.sleep(video_pts - audio_pts)
 
                 if img_on_cnv is None:
                     setSize(root, w + side_w, h + control_h)
