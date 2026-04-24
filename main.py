@@ -53,7 +53,7 @@ def main() -> None:
     instance = vlc.Instance()
     player = instance.media_player_new()
 
-    current_file = os.path.abspath("hoge.mp4")
+    current_file = ""
     duration_sec = 0.0
     paused = False
     slider_dragging = False
@@ -64,7 +64,7 @@ def main() -> None:
 
     current_sec_var = tk.StringVar(value="再生位置: 0.00 秒")
     pause_btn_txt = tk.StringVar(value="一時停止")
-    file_var = tk.StringVar(value=f"ファイル: {current_file}")
+    file_var = tk.StringVar(value="ファイル: (未選択)")
     chapter_name_var = tk.StringVar(value="")
     speed_var = tk.StringVar(value="1.0x")
 
@@ -382,7 +382,6 @@ def main() -> None:
         speed_status_var.set("(この環境では未対応)")
 
     apply_video_target()
-    start_media(current_file)
     ui_tick()
     root.mainloop()
 
