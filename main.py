@@ -72,6 +72,7 @@ def main() -> None:
     chapter_index = 1
     last_video_pts = 0.0
     skip_av_sync_until = 0.0
+    app_closing = False
 
     current_sec_var = tk.StringVar(value="再生位置: 0.00 秒")
     pause_btn_txt = tk.StringVar(value="一時停止")
@@ -319,6 +320,24 @@ def main() -> None:
         player.seek(clamp_seek_target(seek_var.get()), relative=False)
         skip_av_sync_until = time.time() + 0.4
 
+    def on_close() -> None:
+        nonlocal app_closing
+        if app_closing:
+            return
+        app_closing = True
+        try:
+            player.set_pause(True)
+        except Exception:
+            pass
+        try:
+            player.close_player()
+        except Exception:
+            pass
+        try:
+            root.destroy()
+        except Exception:
+            pass
+
     pause_btn.config(command=on_pause_toggle)
     back_btn.config(command=lambda: do_relative_seek(-15.0))
     forward_btn.config(command=lambda: do_relative_seek(15.0))
@@ -332,8 +351,11 @@ def main() -> None:
     seek_scale.bind("<ButtonRelease-1>", on_seek_release)
     chapter_listbox.bind("<<ListboxSelect>>", on_chapter_select)
     chapter_listbox.bind("<Double-Button-1>", on_chapter_jump)
+    root.protocol("WM_DELETE_WINDOW", on_close)
 
     while True:
+        if app_closing:
+            break
         meta = player.get_metadata()
         if meta and isinstance(meta.get("duration"), (int, float)):
             duration_sec = float(meta["duration"])
@@ -397,8 +419,12 @@ def main() -> None:
         if not slider_dragging:
             seek_var.set(clamp_seek_target(now_sec))
 
-        root.update_idletasks()
-        root.update()
+        try:
+            root.update_idletasks()
+            root.update()
+        except tk.TclError:
+            on_close()
+            break
 
     return
 
