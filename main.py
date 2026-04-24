@@ -4,23 +4,13 @@ import sys
 import warnings
 import os
 import re
-
-#------------------------------------------------------------------------------
-# SYSTEM設定
-#
-# - バイナリコード出力抑止
-# - 実行時警告の出力抑止
-#------------------------------------------------------------------------------
-
-sys.dont_write_bytecode = True
-warnings.filterwarnings( 'ignore' )
-
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from ffpyplayer.player import MediaPlayer
-from ffpyplayer.pic import SWScale
-from PIL import Image as PILImage, ImageTk
-import time
+import vlc
+
+sys.dont_write_bytecode = True
+warnings.filterwarnings("ignore")
+
 
 def seconds_to_hms(sec: float) -> str:
     total = max(0, int(sec))
@@ -29,51 +19,48 @@ def seconds_to_hms(sec: float) -> str:
     s = total % 60
     return f"{h}:{m:02d}:{s:02d}"
 
+
 def hms_to_seconds(hms: str):
     if not re.fullmatch(r"\d+:[0-5]\d:[0-5]\d", hms):
         return None
     hh, mm, ss = hms.split(":")
     return int(hh) * 3600 + int(mm) * 60 + int(ss)
 
+
 def main() -> None:
-    root: tk.Tk = tk.Tk()
-    root.title("ffpyplayer sample")
-    control_h = 120
-    side_w = 360
-    setSize(root, 640 + side_w, 480 + control_h)
+    root = tk.Tk()
+    root.title("python-vlc sample")
+    root.geometry("1000x620")
+    root.minsize(1000, 620)
 
     root_frame = tk.Frame(root)
-    root_frame.pack(side="top", fill="both", expand=True)
+    root_frame.pack(fill="both", expand=True)
 
     left_frame = tk.Frame(root_frame)
     left_frame.pack(side="left", fill="both", expand=True)
 
-    right_frame = tk.Frame(root_frame, width=side_w)
+    right_frame = tk.Frame(root_frame, width=360)
     right_frame.pack(side="right", fill="y", padx=8, pady=8)
     right_frame.pack_propagate(False)
 
-    cnv: tk.Canvas = tk.Canvas(left_frame, bg="black", width=640, height=480)
-    cnv.pack(side="top")
+    video_frame = tk.Frame(left_frame, bg="black", width=640, height=480)
+    video_frame.pack(side="top", fill="both", expand=True)
+    video_frame.pack_propagate(False)
 
     ctrl_frame = tk.Frame(left_frame)
     ctrl_frame.pack(side="top", fill="x", padx=8, pady=6)
 
-    current_file = os.path.abspath("hoge.mp4")
-    player: MediaPlayer = MediaPlayer(current_file)
+    instance = vlc.Instance()
+    player = instance.media_player_new()
 
-    img_on_cnv = None
-    sws_to_rgb = None
-    sws_src_fmt = ""
-    sws_src_size = (0, 0)
+    current_file = os.path.abspath("hoge.mp4")
     duration_sec = 0.0
     paused = False
     slider_dragging = False
     chapters = []
     chapter_index = 1
-    last_video_pts = 0.0
-    skip_av_sync_until = 0.0
     app_closing = False
-    speed_supported = False
+    speed_supported = callable(getattr(player, "set_rate", None))
 
     current_sec_var = tk.StringVar(value="再生位置: 0.00 秒")
     pause_btn_txt = tk.StringVar(value="一時停止")
@@ -105,7 +92,7 @@ def main() -> None:
         to=100.0,
         resolution=0.1,
         showvalue=False,
-        length=620
+        length=620,
     )
     seek_scale.pack(side="top", fill="x", pady=(8, 0))
 
@@ -124,23 +111,20 @@ def main() -> None:
 
     speed_frame = tk.Frame(right_frame)
     speed_frame.pack(side="top", fill="x", pady=(0, 8))
-    speed_label = tk.Label(speed_frame, text="再生速度:")
-    speed_label.pack(side="left")
+    tk.Label(speed_frame, text="再生速度:").pack(side="left")
     speed_options = ["0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x"]
     speed_menu = tk.OptionMenu(speed_frame, speed_var, *speed_options)
     speed_menu.config(width=8)
     speed_menu.pack(side="left", padx=(8, 0))
     speed_status_var = tk.StringVar(value="")
-    speed_status_lbl = tk.Label(speed_frame, textvariable=speed_status_var, anchor="w")
-    speed_status_lbl.pack(side="left", padx=(8, 0))
+    tk.Label(speed_frame, textvariable=speed_status_var, anchor="w").pack(side="left", padx=(8, 0))
 
     chapter_listbox = tk.Listbox(right_frame, height=18)
     chapter_listbox.pack(side="top", fill="both", expand=True)
 
     chapter_edit_frame = tk.Frame(right_frame)
     chapter_edit_frame.pack(side="top", fill="x", pady=(8, 0))
-    chapter_name_entry = tk.Entry(chapter_edit_frame, textvariable=chapter_name_var)
-    chapter_name_entry.pack(side="left", fill="x", expand=True)
+    tk.Entry(chapter_edit_frame, textvariable=chapter_name_var).pack(side="left", fill="x", expand=True)
     rename_btn = tk.Button(chapter_edit_frame, text="名称更新", width=10)
     rename_btn.pack(side="left", padx=(8, 0))
     delete_btn = tk.Button(chapter_edit_frame, text="削除", width=8)
@@ -151,74 +135,84 @@ def main() -> None:
             return max(0.0, min(target, duration_sec))
         return max(0.0, target)
 
-    def do_relative_seek(delta: float) -> None:
-        nonlocal skip_av_sync_until
-        base_sec = player.get_pts()
-        if base_sec is None:
-            base_sec = 0.0
-        target = clamp_seek_target(base_sec + delta)
-        if duration_sec > 0:
-            player.seek(target, relative=False)
-        else:
-            player.seek(delta, relative=True)
-        skip_av_sync_until = time.time() + 0.4
+    def get_pos_sec() -> float:
+        cur = player.get_time()
+        if cur is None or cur < 0:
+            return 0.0
+        return cur / 1000.0
 
-    def on_pause_toggle() -> None:
-        nonlocal paused
-        paused = not paused
-        player.set_pause(paused)
-        pause_btn_txt.set("再開" if paused else "一時停止")
+    def seek_to(target: float) -> None:
+        player.set_time(int(clamp_seek_target(target) * 1000))
+
+    def apply_video_target() -> None:
+        root.update_idletasks()
+        hwnd = video_frame.winfo_id()
+        player.set_hwnd(hwnd)
 
     def refresh_chapter_list() -> None:
         chapter_listbox.delete(0, tk.END)
         for ch in sorted(chapters, key=lambda x: x["sec"]):
             chapter_listbox.insert(tk.END, f"({ch['sec']:.2f}) {seconds_to_hms(ch['sec'])} {ch['name']}")
 
-    def reset_player(video_path: str) -> None:
-        nonlocal player, current_file, img_on_cnv, sws_to_rgb, sws_src_fmt, sws_src_size, skip_av_sync_until, speed_supported
-        nonlocal duration_sec, paused, slider_dragging
+    def on_speed_change(*_args) -> None:
+        if not speed_supported:
+            return
+        text = speed_var.get().strip().lower()
+        if not text.endswith("x"):
+            return
         try:
-            player.close_player()
-        except Exception:
-            pass
-        player = MediaPlayer(video_path)
+            rate = float(text[:-1])
+        except ValueError:
+            return
+        if rate <= 0:
+            return
+        ok = player.set_rate(rate)
+        if ok == -1:
+            messagebox.showerror("エラー", "再生速度の変更に失敗しました。")
+
+    def start_media(video_path: str) -> None:
+        nonlocal current_file, duration_sec, paused
+        player.stop()
+        media = instance.media_new(video_path)
+        player.set_media(media)
         current_file = video_path
         file_var.set(f"ファイル: {current_file}")
-        img_on_cnv = None
-        sws_to_rgb = None
-        sws_src_fmt = ""
-        sws_src_size = (0, 0)
         duration_sec = 0.0
         paused = False
-        slider_dragging = False
         pause_btn_txt.set("一時停止")
         seek_var.set(0.0)
         current_sec_var.set("再生位置: 0.00 秒")
-        skip_av_sync_until = time.time() + 0.4
-        speed_supported = callable(getattr(player, "set_speed", None))
-        if speed_supported:
-            speed_menu.config(state="normal")
-            speed_status_var.set("")
-        else:
-            speed_menu.config(state="disabled")
-            speed_var.set("1.0x")
-            speed_status_var.set("(この環境では未対応)")
+        apply_video_target()
+        player.play()
         on_speed_change()
+
+    def do_relative_seek(delta: float) -> None:
+        seek_to(get_pos_sec() + delta)
+
+    def on_pause_toggle() -> None:
+        nonlocal paused
+        paused = not paused
+        if paused:
+            player.pause()
+        else:
+            player.play()
+            on_speed_change()
+        pause_btn_txt.set("再開" if paused else "一時停止")
 
     def on_select_file() -> None:
         path = filedialog.askopenfilename(
             title="動画ファイル選択",
-            filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")]
+            filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")],
         )
         if not path:
             return
-        reset_player(path)
+        start_media(path)
         chapters.clear()
         refresh_chapter_list()
 
     def on_add_chapter() -> None:
         nonlocal chapter_index
-        sec = last_video_pts
+        sec = get_pos_sec()
         chapters.append({"sec": float(sec), "name": f"chapter{chapter_index}"})
         chapter_index += 1
         refresh_chapter_list()
@@ -237,21 +231,20 @@ def main() -> None:
         sel = chapter_listbox.curselection()
         if not sel:
             return
-        new_name = chapter_name_var.get().strip()
-        if not new_name:
+        name = chapter_name_var.get().strip()
+        if not name:
             messagebox.showerror("エラー", "チャプター名を入力してください。")
             return
         idx = sel[0]
         sorted_chapters = sorted(chapters, key=lambda x: x["sec"])
-        if not (0 <= idx < len(sorted_chapters)):
-            return
-        target = sorted_chapters[idx]
-        for ch in chapters:
-            if ch is target:
-                ch["name"] = new_name
-                break
-        refresh_chapter_list()
-        chapter_listbox.selection_set(idx)
+        if 0 <= idx < len(sorted_chapters):
+            target = sorted_chapters[idx]
+            for ch in chapters:
+                if ch is target:
+                    ch["name"] = name
+                    break
+            refresh_chapter_list()
+            chapter_listbox.selection_set(idx)
 
     def on_chapter_delete() -> None:
         sel = chapter_listbox.curselection()
@@ -259,38 +252,34 @@ def main() -> None:
             return
         idx = sel[0]
         sorted_chapters = sorted(chapters, key=lambda x: x["sec"])
-        if not (0 <= idx < len(sorted_chapters)):
-            return
-        target = sorted_chapters[idx]
-        for i, ch in enumerate(chapters):
-            if ch is target:
-                del chapters[i]
-                break
-        refresh_chapter_list()
-        chapter_name_var.set("")
+        if 0 <= idx < len(sorted_chapters):
+            target = sorted_chapters[idx]
+            for i, ch in enumerate(chapters):
+                if ch is target:
+                    del chapters[i]
+                    break
+            refresh_chapter_list()
+            chapter_name_var.set("")
 
     def on_chapter_jump(_event=None) -> None:
-        nonlocal skip_av_sync_until
         sel = chapter_listbox.curselection()
         if not sel:
             return
         idx = sel[0]
         sorted_chapters = sorted(chapters, key=lambda x: x["sec"])
         if 0 <= idx < len(sorted_chapters):
-            player.seek(clamp_seek_target(sorted_chapters[idx]["sec"]), relative=False)
-            skip_av_sync_until = time.time() + 0.4
+            seek_to(sorted_chapters[idx]["sec"])
 
     def on_save_chapters() -> None:
         if not current_file:
             messagebox.showerror("エラー", "保存対象の動画ファイルがありません。")
             return
-        base_name = os.path.splitext(os.path.basename(current_file))[0]
-        out_path = os.path.join(os.getcwd(), f"{base_name}.txt")
-        sorted_chapters = sorted(chapters, key=lambda x: x["sec"])
+        base = os.path.splitext(os.path.basename(current_file))[0]
+        out_path = os.path.join(os.getcwd(), f"{base}.txt")
         try:
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(current_file + "\n")
-                for ch in sorted_chapters:
+                for ch in sorted(chapters, key=lambda x: x["sec"]):
                     f.write(f"{seconds_to_hms(ch['sec'])},{ch['name']}\n")
             messagebox.showinfo("保存完了", f"保存しました:\n{out_path}")
         except Exception as ex:
@@ -299,7 +288,7 @@ def main() -> None:
     def on_load_chapters() -> None:
         path = filedialog.askopenfilename(
             title="チャプターファイル読込",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
         )
         if not path:
             return
@@ -309,12 +298,12 @@ def main() -> None:
         except Exception as ex:
             messagebox.showerror("エラー", f"読み込みに失敗しました。\n{ex}")
             return
-        if len(lines) < 1:
+        if not lines:
             messagebox.showerror("エラー", "ファイル内容が空です。")
             return
 
         video_path = lines[0].strip()
-        parsed_chapters = []
+        parsed = []
         for i, line in enumerate(lines[1:], start=2):
             if not line.strip():
                 continue
@@ -326,11 +315,11 @@ def main() -> None:
             if sec is None or not name.strip():
                 messagebox.showerror("形式エラー", f"{i}行目が不正です。h:mm:ss,チャプター名 形式にしてください。")
                 return
-            parsed_chapters.append({"sec": float(sec), "name": name.strip()})
+            parsed.append({"sec": float(sec), "name": name.strip()})
 
-        reset_player(video_path)
+        start_media(video_path)
         chapters.clear()
-        chapters.extend(parsed_chapters)
+        chapters.extend(parsed)
         refresh_chapter_list()
 
     def on_seek_press(_event) -> None:
@@ -338,30 +327,9 @@ def main() -> None:
         slider_dragging = True
 
     def on_seek_release(_event) -> None:
-        nonlocal skip_av_sync_until
         nonlocal slider_dragging
         slider_dragging = False
-        player.seek(clamp_seek_target(seek_var.get()), relative=False)
-        skip_av_sync_until = time.time() + 0.4
-
-    def on_speed_change(*_args) -> None:
-        nonlocal skip_av_sync_until
-        if not speed_supported:
-            return
-        speed_txt = speed_var.get().strip().lower()
-        if not speed_txt.endswith("x"):
-            return
-        try:
-            speed = float(speed_txt[:-1])
-        except ValueError:
-            return
-        if speed <= 0:
-            return
-        try:
-            player.set_speed(speed)
-            skip_av_sync_until = time.time() + 0.4
-        except Exception:
-            messagebox.showerror("エラー", "再生速度の変更に失敗しました。")
+        seek_to(seek_var.get())
 
     def on_close() -> None:
         nonlocal app_closing
@@ -369,17 +337,26 @@ def main() -> None:
             return
         app_closing = True
         try:
-            player.set_pause(True)
+            player.stop()
         except Exception:
             pass
-        try:
-            player.close_player()
-        except Exception:
-            pass
-        try:
-            root.destroy()
-        except Exception:
-            pass
+        root.destroy()
+
+    def ui_tick() -> None:
+        nonlocal duration_sec
+        if app_closing:
+            return
+        length = player.get_length()
+        if length is not None and length > 0:
+            duration_sec = length / 1000.0
+            seek_scale.config(to=duration_sec)
+
+        now_sec = get_pos_sec()
+        current_sec_var.set(f"再生位置: {now_sec:.2f} 秒")
+        if not slider_dragging:
+            seek_var.set(clamp_seek_target(now_sec))
+
+        root.after(30, ui_tick)
 
     pause_btn.config(command=on_pause_toggle)
     back_btn.config(command=lambda: do_relative_seek(-15.0))
@@ -394,100 +371,21 @@ def main() -> None:
     seek_scale.bind("<ButtonRelease-1>", on_seek_release)
     chapter_listbox.bind("<<ListboxSelect>>", on_chapter_select)
     chapter_listbox.bind("<Double-Button-1>", on_chapter_jump)
-    root.protocol("WM_DELETE_WINDOW", on_close)
     speed_var.trace_add("write", on_speed_change)
-    speed_supported = callable(getattr(player, "set_speed", None))
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
     if speed_supported:
         speed_menu.config(state="normal")
         speed_status_var.set("")
     else:
         speed_menu.config(state="disabled")
-        speed_var.set("1.0x")
         speed_status_var.set("(この環境では未対応)")
-    on_speed_change()
 
-    while True:
-        if app_closing:
-            break
-        meta = player.get_metadata()
-        if meta and isinstance(meta.get("duration"), (int, float)):
-            duration_sec = float(meta["duration"])
-            if duration_sec > 0:
-                seek_scale.config(to=duration_sec)
-
-        frame, val = player.get_frame()
-
-        if frame is None:
-            time.sleep(0.01)
-        else:
-            data, frame_pts = frame
-            # ffpyplayer の映像フレーム(Image)のみ処理する
-            # 音声フレームはこれらのメソッドを持たないため除外できる
-            if all(hasattr(data, attr) for attr in ("get_size", "get_pixel_format", "to_bytearray")):
-                # 映像
-                img = data
-                video_pts = frame_pts
-                if isinstance(video_pts, (int, float)):
-                    last_video_pts = float(video_pts)
-
-                # 表示
-
-                src_size = img.get_size()
-                src_fmt = img.get_pixel_format()
-                if src_fmt != "rgb24":
-                    # PILで扱いやすいRGBに揃える
-                    if sws_to_rgb is None or sws_src_fmt != src_fmt or sws_src_size != src_size:
-                        sws_to_rgb = SWScale(src_size[0], src_size[1], src_fmt, ofmt="rgb24")
-                        sws_src_fmt = src_fmt
-                        sws_src_size = src_size
-                    img = sws_to_rgb.scale(img)
-                    src_size = img.get_size()
-
-                plane = img.to_bytearray()[0]
-                pil_img = PILImage.frombytes("RGB", src_size, bytes(plane))
-
-                tk_img = ImageTk.PhotoImage(image=pil_img)
-                cnv.image = tk_img  # 参照を保持してGCで消えないようにする
-
-                w, h = pil_img.size
-
-                audio_pts = player.get_pts()
-                if isinstance(video_pts, (int, float)):
-                    # 巻き戻し/シーク直後は古いPTS差で固まりやすいため、短時間だけ同期待ちを抑止
-                    if video_pts + 0.001 < last_video_pts:
-                        skip_av_sync_until = max(skip_av_sync_until, time.time() + 0.4)
-                if time.time() >= skip_av_sync_until and audio_pts is not None and video_pts > audio_pts:
-                    time.sleep(min(video_pts - audio_pts, 0.05))
-                    #time.sleep(video_pts - audio_pts)
-
-                if img_on_cnv is None:
-                    setSize(root, w + side_w, h + control_h)
-                    cnv.config(width=w, height=h)
-                    seek_scale.config(length=max(200, w - 20))
-                    img_on_cnv = cnv.create_image(0, 0, anchor='nw', image=tk_img)
-                else:
-                    cnv.itemconfig(img_on_cnv, image=tk_img)
-
-        now_sec = last_video_pts
-        current_sec_var.set(f"再生位置: {now_sec:.2f} 秒")
-        if not slider_dragging:
-            seek_var.set(clamp_seek_target(now_sec))
-
-        try:
-            root.update_idletasks()
-            root.update()
-        except tk.TclError:
-            on_close()
-            break
-
-    return
-
-def setSize(rt: tk.Tk, w: int, h: int) -> None:
-    rt.geometry(str(w) + "x" + str(h))
-    rt.minsize(w, h)
-    rt.maxsize(w, h)
+    apply_video_target()
+    start_media(current_file)
+    ui_tick()
+    root.mainloop()
 
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     main()
