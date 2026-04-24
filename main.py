@@ -70,6 +70,8 @@ def main() -> None:
     slider_dragging = False
     chapters = []
     chapter_index = 1
+    last_video_pts = 0.0
+    skip_av_sync_until = 0.0
 
     current_sec_var = tk.StringVar(value="再生位置: 0.00 秒")
     pause_btn_txt = tk.StringVar(value="一時停止")
@@ -135,6 +137,7 @@ def main() -> None:
         return max(0.0, target)
 
     def do_relative_seek(delta: float) -> None:
+        nonlocal skip_av_sync_until
         base_sec = player.get_pts()
         if base_sec is None:
             base_sec = 0.0
@@ -143,6 +146,7 @@ def main() -> None:
             player.seek(target, relative=False)
         else:
             player.seek(delta, relative=True)
+        skip_av_sync_until = time.time() + 0.4
 
     def on_pause_toggle() -> None:
         nonlocal paused
@@ -189,9 +193,7 @@ def main() -> None:
 
     def on_add_chapter() -> None:
         nonlocal chapter_index
-        sec = player.get_pts()
-        if sec is None:
-            sec = 0.0
+        sec = last_video_pts
         chapters.append({"sec": float(sec), "name": f"chapter{chapter_index}"})
         chapter_index += 1
         refresh_chapter_list()
@@ -243,6 +245,7 @@ def main() -> None:
         chapter_name_var.set("")
 
     def on_chapter_jump(_event=None) -> None:
+        nonlocal skip_av_sync_until
         sel = chapter_listbox.curselection()
         if not sel:
             return
@@ -250,6 +253,7 @@ def main() -> None:
         sorted_chapters = sorted(chapters, key=lambda x: x["sec"])
         if 0 <= idx < len(sorted_chapters):
             player.seek(clamp_seek_target(sorted_chapters[idx]["sec"]), relative=False)
+            skip_av_sync_until = time.time() + 0.4
 
     def on_save_chapters() -> None:
         if not current_file:
@@ -309,9 +313,11 @@ def main() -> None:
         slider_dragging = True
 
     def on_seek_release(_event) -> None:
+        nonlocal skip_av_sync_until
         nonlocal slider_dragging
         slider_dragging = False
         player.seek(clamp_seek_target(seek_var.get()), relative=False)
+        skip_av_sync_until = time.time() + 0.4
 
     pause_btn.config(command=on_pause_toggle)
     back_btn.config(command=lambda: do_relative_seek(-15.0))
@@ -346,6 +352,8 @@ def main() -> None:
                 # 映像
                 img = data
                 video_pts = frame_pts
+                if isinstance(video_pts, (int, float)):
+                    last_video_pts = float(video_pts)
 
                 # 表示
 
@@ -369,8 +377,12 @@ def main() -> None:
                 w, h = pil_img.size
 
                 audio_pts = player.get_pts()
-                if audio_pts is not None and video_pts > audio_pts:
-                    time.sleep(video_pts - audio_pts)
+                if isinstance(video_pts, (int, float)):
+                    # 巻き戻し/シーク直後は古いPTS差で固まりやすいため、短時間だけ同期待ちを抑止
+                    if video_pts + 0.001 < last_video_pts:
+                        skip_av_sync_until = max(skip_av_sync_until, time.time() + 0.4)
+                if time.time() >= skip_av_sync_until and audio_pts is not None and video_pts > audio_pts:
+                    time.sleep(min(video_pts - audio_pts, 0.05))
 
                 if img_on_cnv is None:
                     setSize(root, w + side_w, h + control_h)
@@ -380,9 +392,7 @@ def main() -> None:
                 else:
                     cnv.itemconfig(img_on_cnv, image=tk_img)
 
-        now_sec = player.get_pts()
-        if now_sec is None:
-            now_sec = 0.0
+        now_sec = last_video_pts
         current_sec_var.set(f"再生位置: {now_sec:.2f} 秒")
         if not slider_dragging:
             seek_var.set(clamp_seek_target(now_sec))
