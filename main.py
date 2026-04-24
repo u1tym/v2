@@ -37,9 +37,6 @@ def main() -> None:
     while True:
         frame, val = player.get_frame()
 
-        if val == "eof":
-            break
-
         if frame is None:
             print("")
         else:
@@ -75,7 +72,7 @@ def main() -> None:
                 audio_pts = player.get_pts()
                 if video_pts > audio_pts:
                     print(video_pts - audio_pts)
-                    time.sleep(video_pts - audio_pts + 0.015)
+                    time.sleep(video_pts - audio_pts)
 
                 if img_on_cnv is None:
                     setSize(root, w, h)
